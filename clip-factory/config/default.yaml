@@ -1,0 +1,43 @@
+# Rutas relativas a la raíz del proyecto. input siempre es inmutable.
+paths:
+  input: data/input
+  working: data/working
+  clips: data/clips
+  exports: data/exports
+  thumbnails: data/thumbnails
+  subtitles: data/subtitles
+  archive: data/archive
+  database: database/clip_factory.db
+  logs: logs
+
+media:
+  ffmpeg_bin: ffmpeg
+  ffprobe_bin: ffprobe
+  probe_timeout: 30.0
+
+logging:
+  level: INFO
+
+runtime:
+  device: cpu
+  threads: 4
+
+# Reservado para fases posteriores; no implica scoring implementado.
+scoring:
+  weights:
+    hook: 1.0
+    emotion: 1.0
+    surprise: 1.0
+    activity: 1.0
+    audio: 1.0
+    context: 1.0
+    duration: 1.0
+    completeness: 1.0
+
+# Reservado para fases posteriores; nunca deformar la imagen.
+editing:
+  width: 1080
+  height: 1920
+  mode: pad
+  video_codec: h264
+  audio_codec: aac

@@ -1,0 +1,6 @@
+# Base conservadora para MacBook Air M1; no requiere CUDA, MPS ni modelos.
+runtime:
+  device: cpu
+  threads: 4
+media:
+  probe_timeout: 30.0
