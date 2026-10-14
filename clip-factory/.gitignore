@@ -9,10 +9,16 @@ build/
 dist/
 .DS_Store
 .env
+.env.*
+!.env.example
+# Modelos y cualquier descarga auxiliar permanecen locales.
+/models/
+.clip_factory.lock
 data/**
 !data/**/
 !data/**/.gitkeep
 database/*.db*
+database/*.sqlite*
 !database/.gitkeep
 logs/*
 !logs/.gitkeep

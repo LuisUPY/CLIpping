@@ -64,6 +64,17 @@ def test_nonzero_exit_retains_error_and_code(monkeypatch):
     assert captured.value.stderr == "corrupt video\n"
 
 
+def test_zero_exit_keeps_normal_ffmpeg_stderr_without_classifying_it(monkeypatch):
+    stderr = "frame=   25 fps=0.0 time=00:00:01.00\n"
+    monkeypatch.setattr(
+        ffmpeg.subprocess, "run",
+        Mock(return_value=subprocess.CompletedProcess([], 0, "", stderr)),
+    )
+    result = run_media_command(["ffmpeg", "-version"])
+    assert result.returncode == 0
+    assert result.stderr == stderr
+
+
 def _doctor_setup(monkeypatch):
     original_import = importlib.import_module
 

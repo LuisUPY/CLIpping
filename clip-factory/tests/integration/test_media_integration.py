@@ -3,6 +3,7 @@
 import hashlib
 import os
 import shutil
+import struct
 
 import pytest
 
@@ -56,3 +57,54 @@ def test_real_probe_of_corrupt_media_exposes_ffprobe_error(tmp_path, media_tools
     assert captured.value.returncode is not None
     assert captured.value.stderr
     assert source.read_bytes() == b"not a video"
+
+
+@pytest.mark.integration
+def test_real_zero_exit_with_damaged_packet_is_fail_and_preserves_source(
+    tmp_path, media_tools
+):
+    """A readable MP4 may return JSON and rc=0 despite a damaged video header."""
+    ffmpeg, ffprobe = media_tools
+    generated = tmp_path / "generated.mp4"
+    run_media_command([
+        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-n",
+        "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25",
+        "-t", "0.6", "-c:v", "mpeg4", "-q:v", "5", "-pix_fmt", "yuv420p",
+        "-threads", "1", str(generated),
+    ], timeout=30)
+    damaged_bytes = bytearray(generated.read_bytes())
+    offset = 0
+    while offset < len(damaged_bytes):
+        size, kind = struct.unpack_from(">I4s", damaged_bytes, offset)
+        assert size >= 8
+        if kind == b"mdat":
+            # Damage the first encoded header, retaining MP4 boxes and all
+            # metadata. Subsequent frames allow ffprobe to finish successfully.
+            assert size > 72
+            damaged_bytes[offset + 8:offset + 72] = b"\0" * 64
+            break
+        offset += size
+    else:
+        pytest.fail("El MP4 sintético no contiene un bloque mdat.")
+
+    source = tmp_path / "input" / "partially-damaged.mp4"
+    source.parent.mkdir()
+    source.write_bytes(damaged_bytes)
+    original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    original_mtime = source.stat().st_mtime_ns
+    result = run_media_command([
+        ffprobe, "-v", "error", "-show_streams", "-show_format", "-of", "json",
+        str(source),
+    ])
+    assert result.returncode == 0
+    assert "header damaged" in result.stderr
+    info = probe_media(source, ffprobe_bin=ffprobe)
+    assert info.resolution == (320, 180)
+    assert info.duration == pytest.approx(0.6)
+    assert info.status == "FAIL"
+    assert info.to_dict()["diagnostics"][0]["severity"] == "ERROR"
+    report = validate_metadata(info)
+    assert report["status"] == "FAIL"
+    assert any("header damaged" in message for message in report["errors"])
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
+    assert source.stat().st_mtime_ns == original_mtime

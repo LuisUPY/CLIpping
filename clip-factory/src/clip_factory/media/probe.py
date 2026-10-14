@@ -40,6 +40,21 @@ class MediaInfo:
     aspect_ratio: str | None = None
     display_width: int | None = None
     display_height: int | None = None
+    diagnostics: tuple[dict[str, str], ...] = ()
+
+    @property
+    def status(self) -> str:
+        """Probe diagnostics status, independent of metadata validation/QC.
+
+        A zero process exit code does not guarantee clean input. Keep warnings
+        distinguishable from errors without discarding useful metadata.
+        """
+        severities = {entry["severity"].upper() for entry in self.diagnostics}
+        if "ERROR" in severities:
+            return "FAIL"
+        if severities & {"WARNING", "WARN"}:
+            return "WARN"
+        return "PASS"
 
     @property
     def resolution(self) -> tuple[int | None, int | None]:
@@ -52,6 +67,8 @@ class MediaInfo:
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["streams"] = list(result["streams"])
+        result["diagnostics"] = list(result["diagnostics"])
+        result["status"] = self.status
         result["video"] = self.path
         result["has_video"] = self.has_video
         result["resolution"] = (
@@ -158,24 +175,38 @@ def probe_media(
     generating packets, clips, thumbnails or output media.
     """
     source = _local_file(path)
-    result = run_media_command(
-        [
-            ffprobe_bin,
-            "-v", "error",
-            "-protocol_whitelist", "file,pipe",
-            "-show_format",
-            "-show_streams",
-            "-of", "json",
-            str(source),
-        ],
-        timeout=timeout,
-    )
+    command = [
+        ffprobe_bin,
+        "-v", "error",
+        "-protocol_whitelist", "file,pipe",
+        "-show_format",
+        "-show_streams",
+        "-of", "json",
+        str(source),
+    ]
+    result = run_media_command(command, timeout=timeout)
+    # This command explicitly uses -v error. Anything emitted on stderr is an
+    # error diagnostic even when ffprobe returns useful JSON and exit code 0.
+    # Keep that policy here: normal FFmpeg progress also uses stderr, so the
+    # generic process adapter must not classify all stderr output as a failure.
+    stderr = result.stderr.strip()
+    diagnostics = ({"severity": "ERROR", "message": stderr},) if stderr else ()
+
+    def invalid_metadata(message: str) -> MediaError:
+        detail = f" Diagnóstico de ffprobe: {stderr}" if stderr else ""
+        return MediaError(
+            message + detail,
+            command=command,
+            stderr=result.stderr,
+            returncode=result.returncode,
+        )
+
     try:
         payload = json.loads(result.stdout)
     except (json.JSONDecodeError, UnicodeError) as exc:
-        raise MediaError(f"ffprobe devolvió JSON inválido para {source}: {exc}") from exc
+        raise invalid_metadata(f"ffprobe devolvió JSON inválido para {source}: {exc}") from exc
     if not isinstance(payload, dict):
-        raise MediaError(f"ffprobe devolvió metadata inválida para {source}.")
+        raise invalid_metadata(f"ffprobe devolvió metadata inválida para {source}.")
     streams = payload.get("streams")
     container = payload.get("format", {})
     if (
@@ -184,7 +215,7 @@ def probe_media(
         or not all(isinstance(stream, dict) for stream in streams)
         or not isinstance(container, dict)
     ):
-        raise MediaError(f"ffprobe no devolvió streams válidos para {source}.")
+        raise invalid_metadata(f"ffprobe no devolvió streams válidos para {source}.")
     videos = [
         stream for stream in streams
         if stream.get("codec_type") == "video"
@@ -236,4 +267,5 @@ def probe_media(
         aspect_ratio=_classify_aspect(dar),
         display_width=display_width,
         display_height=display_height,
+        diagnostics=diagnostics,
     )

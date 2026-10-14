@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -176,3 +177,69 @@ def test_silent_video_is_allowed_unless_audio_required(source, metadata, monkeyp
     assert report["status"] == "FAIL"
     assert report["checks"]["audio_present"] is False
     assert report["warnings"]
+
+
+def test_zero_exit_with_error_stderr_preserves_metadata_and_fails_validation(
+    source, metadata, monkeypatch
+):
+    diagnostic = "[mpeg4 @ 0x123] header damaged\n"
+    execute = Mock(return_value=subprocess.CompletedProcess(
+        [], 0, json.dumps(metadata), diagnostic
+    ))
+    monkeypatch.setattr(probe, "run_media_command", execute)
+    info = probe_media(source)
+    assert info.resolution == (1920, 1080)
+    assert info.duration == 12.345
+    assert info.status == "FAIL"
+    payload = info.to_dict()
+    assert payload["status"] == "FAIL"
+    assert payload["diagnostics"] == [
+        {"severity": "ERROR", "message": diagnostic.strip()}
+    ]
+    assert json.loads(json.dumps(payload))["diagnostics"] == payload["diagnostics"]
+    report = validate_metadata(info)
+    assert report["status"] == "FAIL"
+    assert all(report["checks"].values())
+    assert report["diagnostics"] == payload["diagnostics"]
+    assert diagnostic.strip() in report["errors"]
+    assert execute.call_args.args[0][1:3] == ["-v", "error"]
+
+
+@pytest.mark.parametrize(
+    "diagnostics, expected_status, expected_errors, expected_warnings",
+    [
+        ((), "PASS", [], []),
+        (({"severity": "WARNING", "message": "estimated duration"},),
+         "WARN", [], ["estimated duration"]),
+        (({"severity": "ERROR", "message": "damaged packet"},),
+         "FAIL", ["damaged packet"], []),
+        (({"severity": "WARNING", "message": "estimated duration"},
+          {"severity": "ERROR", "message": "damaged packet"}),
+         "FAIL", ["damaged packet"], ["estimated duration"]),
+    ],
+)
+def test_diagnostic_severity_preserves_warning_and_error_distinction(
+    source, metadata, monkeypatch, diagnostics, expected_status,
+    expected_errors, expected_warnings,
+):
+    _mock_probe(monkeypatch, metadata)
+    info = replace(probe_media(source), diagnostics=diagnostics)
+    assert info.status == expected_status
+    assert info.to_dict()["status"] == expected_status
+    report = validate_metadata(info)
+    assert report["status"] == expected_status
+    assert report["errors"] == expected_errors
+    assert report["diagnostics"] == list(diagnostics)
+    for warning in expected_warnings:
+        assert warning in report["warnings"]
+
+
+def test_invalid_json_still_retains_zero_exit_error_diagnostic(source, monkeypatch):
+    monkeypatch.setattr(probe, "run_media_command", Mock(return_value=(
+        subprocess.CompletedProcess([], 0, "not JSON", "header damaged\n")
+    )))
+    with pytest.raises(MediaError, match="header damaged") as captured:
+        probe_media(source)
+    assert captured.value.returncode == 0
+    assert captured.value.stderr == "header damaged\n"
+    assert captured.value.command[-1] == str(source.resolve())

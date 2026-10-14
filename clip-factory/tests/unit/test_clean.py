@@ -10,8 +10,10 @@ spec.loader.exec_module(clean)
 def test_clean_requires_apply_and_preserves_non_temporary_files(tmp_path):
     working = tmp_path / "data/working"
     working.mkdir(parents=True)
-    temporary = working / "generated.tmp"
+    temporary = working / (".metadata-" + "a" * 32 + ".tmp")
     temporary.write_text("temporary")
+    unmanaged = working / "generated.tmp"
+    unmanaged.write_text("not owned by CLIpping")
     report = working / "report.json"
     report.write_text("{}")
     original = tmp_path / "data/input/video.tmp"
@@ -21,6 +23,7 @@ def test_clean_requires_apply_and_preserves_non_temporary_files(tmp_path):
     assert temporary.exists()
     assert clean.main(["--root", str(tmp_path), "--apply"]) == 0
     assert not temporary.exists()
+    assert unmanaged.read_text() == "not owned by CLIpping"
     assert report.exists() and original.read_text() == "original"
 
 

@@ -29,12 +29,23 @@ def validate_metadata(info: MediaInfo, *, require_audio: bool = False) -> dict[s
     if require_audio:
         checks["audio_present"] = info.has_audio
     errors = [f"Falló la validación básica de metadata: {name}." for name, passed in checks.items() if not passed]
+    diagnostics = [dict(entry) for entry in info.diagnostics]
+    diagnostic_warnings = []
+    for entry in diagnostics:
+        severity = entry["severity"].upper()
+        if severity == "ERROR":
+            errors.append(entry["message"])
+        elif severity in {"WARNING", "WARN"}:
+            diagnostic_warnings.append(entry["message"])
     return {
-        "status": "FAIL" if errors else "PASS",
+        "status": "FAIL" if errors else ("WARN" if diagnostic_warnings else "PASS"),
         "scope": "metadata_only",
         "checks": checks,
+        "diagnostics": diagnostics,
         "errors": errors,
-        "warnings": [
+        # This scope reminder is informational. It does not turn every healthy
+        # metadata inspection into WARN; only explicit warning diagnostics do.
+        "warnings": diagnostic_warnings + [
             "No se validaron decodificación completa, frames negros, subtítulos ni formato de exportación."
         ],
     }

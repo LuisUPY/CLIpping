@@ -11,9 +11,11 @@ import importlib.util
 import math
 import os
 import platform
+import selectors
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from time import monotonic
 from typing import Any
 
 
@@ -52,6 +54,8 @@ def run_media_command(
     This low-level adapter does not decide output paths. Transformation modules
     must enforce original-file protection before using it. Phase 1 only calls
     read-only executable diagnostics and ffprobe through this adapter.
+    Successful commands retain stderr unchanged; FFmpeg uses it for ordinary
+    progress, so each caller owns its diagnostic severity policy.
     """
     if isinstance(command, (str, bytes)) or not command:
         raise ValueError("El comando debe ser una lista de argumentos no vacía.")
@@ -99,6 +103,92 @@ def run_media_command(
             returncode=result.returncode,
         )
     return result
+
+
+def stream_media_command(
+    command: Sequence[str | os.PathLike[str]],
+    *,
+    on_stdout_line: Callable[[str], None],
+    timeout: float = 300.0,
+) -> subprocess.CompletedProcess[str]:
+    """Stream text metadata, draining stderr concurrently through POSIX pipes.
+
+    Python receives no frames. Lines and the diagnostic tail are bounded to
+    64 KiB; stdout is never accumulated. Parser failure, timeout or interruption
+    kills and reaps the child. Supported on macOS (including ARM64) and Linux.
+    """
+    if isinstance(command, (str, bytes)) or not command:
+        raise ValueError("El comando debe ser una lista de argumentos no vacía.")
+    if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("El timeout debe ser un número finito mayor que cero.")
+    arguments = [os.fspath(argument) for argument in command]
+    deadline = monotonic() + timeout
+    try:
+        process = subprocess.Popen(
+            arguments, shell=False, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except (FileNotFoundError, PermissionError) as exc:
+        raise DependencyError(
+            f"No se pudo iniciar el ejecutable local {arguments[0]}: {exc}",
+            command=arguments,
+        ) from exc
+    except OSError as exc:
+        raise MediaError(f"No se pudo ejecutar {arguments[0]}: {exc}", command=arguments) from exc
+    pending = b""
+    diagnostic = b""
+    truncated = False
+    limit = 65536
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+            selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+            while selector.get_map():
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(arguments, timeout)
+                for key, _ in selector.select(remaining):
+                    chunk = os.read(key.fd, limit)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if key.data == "stderr":
+                        truncated |= len(diagnostic) + len(chunk) > limit
+                        diagnostic = (diagnostic + chunk)[-limit:]
+                        continue
+                    lines = (pending + chunk).split(b"\n")
+                    pending = lines.pop()
+                    for line in lines:
+                        if len(line) > limit:
+                            raise MediaError("FFmpeg devolvió una línea de metadata demasiado larga.", command=arguments)
+                        on_stdout_line(line.decode("utf-8", errors="replace"))
+                    if len(pending) > limit:
+                        raise MediaError("FFmpeg devolvió una línea de metadata demasiado larga.", command=arguments)
+            if pending:
+                on_stdout_line(pending.decode("utf-8", errors="replace"))
+            process.wait(timeout=max(0.0, deadline - monotonic()))
+        stderr = diagnostic.decode("utf-8", errors="replace")
+        if truncated:
+            stderr = "[stderr truncado a los últimos 64 KiB]\n" + stderr
+        if process.returncode != 0:
+            raise MediaError(
+                f"{arguments[0]} terminó con código {process.returncode}: {stderr.strip()}",
+                command=arguments, stderr=stderr, returncode=process.returncode,
+            )
+        return subprocess.CompletedProcess(arguments, process.returncode, "", stderr)
+    except subprocess.TimeoutExpired as exc:
+        raise MediaError(
+            f"{arguments[0]} superó el timeout de {timeout:g} segundos.",
+            command=arguments, stderr=diagnostic.decode("utf-8", errors="replace"),
+        ) from exc
+    except OSError as exc:
+        raise MediaError(f"Error leyendo {arguments[0]}: {exc}", command=arguments) from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        process.stdout.close()
+        process.stderr.close()
 
 
 def _check(available: bool, *, required: bool, **details: Any) -> dict[str, Any]:

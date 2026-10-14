@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import math
 import os
 from pathlib import Path, PureWindowsPath
@@ -29,6 +29,31 @@ _DEFAULTS: dict[str, Any] = {
         "logs": "logs",
     },
     "media": {"ffmpeg_bin": "ffmpeg", "ffprobe_bin": "ffprobe", "probe_timeout": 30.0},
+    "analysis": {
+        "scenes": {
+            "threshold": 10.0, "min_scene_duration": 0.0,
+            "timeout": 300.0, "video_stream": None,
+        },
+        "audio": {
+            "window_seconds": 0.5, "peak_dbfs": -6.0, "silence_dbfs": -50.0,
+            "change_db": 6.0, "min_silence_duration": 0.5,
+            "energy_floor_dbfs": -120.0, "timeout": 300.0, "audio_stream": None,
+            "max_windows": 100_000, "max_events": 20_000,
+        },
+        "transcription": {
+            "engine": "whisper.cpp", "executable": "whisper-cli", "model": None,
+            "language": "auto", "timeout": 300.0, "audio_stream": None,
+            "chunk_seconds": 30.0, "max_segments": 100_000, "silence_dbfs": -50.0,
+        },
+        "moments": {
+            "min_duration": 5.0, "max_duration": 45.0,
+            "context_before": 2.0, "context_after": 3.0,
+            "coincidence_window": 1.0, "merge_gap": 1.0, "cooldown": 10.0,
+            "min_sources": 2, "min_speech_duration": 2.0, "min_speech_words": 6,
+            "max_audio_event_duration": 4.0, "max_candidates": 20,
+            "max_events": 100_000, "timeout": 10.0,
+        },
+    },
     "logging": {"level": "INFO"},
     "runtime": {"device": "cpu", "threads": 4},
     "scoring": {"weights": {
@@ -217,6 +242,32 @@ def _validate(data: dict[str, Any], root: Path) -> Mapping[str, Path]:
     if timeout <= 0:
         raise ConfigError("media.probe_timeout must be greater than zero")
     media["probe_timeout"] = timeout
+    scenes = data["analysis"]["scenes"]
+    for key in ("threshold", "min_scene_duration", "timeout"):
+        scenes[key] = _number(scenes[key], f"analysis.scenes.{key}")
+    if not 0 <= scenes["threshold"] <= 100:
+        raise ConfigError("analysis.scenes.threshold must be between 0 and 100")
+    if scenes["min_scene_duration"] < 0 or scenes["timeout"] <= 0:
+        raise ConfigError("analysis.scenes requires min_scene_duration >= 0 and timeout > 0")
+    stream = scenes["video_stream"]
+    if stream is not None and (type(stream) is not int or stream < 0):
+        raise ConfigError("analysis.scenes.video_stream must be null or a nonnegative ffprobe stream index")
+    # Share the engine's complete validation contract; loading config runs no media tools.
+    from clip_factory.analysis.audio import AudioAnalysisConfig
+    try:
+        data["analysis"]["audio"] = asdict(AudioAnalysisConfig(**data["analysis"]["audio"]))
+    except ValueError as error:
+        raise ConfigError(f"analysis.audio: {error}") from error
+    from clip_factory.analysis.transcript import TranscriptConfig
+    try:
+        data["analysis"]["transcription"] = asdict(TranscriptConfig(**data["analysis"]["transcription"]))
+    except ValueError as error:
+        raise ConfigError(f"analysis.transcription: {error}") from error
+    from clip_factory.analysis.moments import MomentDetectionConfig
+    try:
+        data["analysis"]["moments"] = asdict(MomentDetectionConfig(**data["analysis"]["moments"]))
+    except ValueError as error:
+        raise ConfigError(f"analysis.moments: {error}") from error
     level = _text(data["logging"]["level"], "logging.level").upper()
     if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ConfigError("logging.level must be DEBUG, INFO, WARNING, ERROR or CRITICAL")

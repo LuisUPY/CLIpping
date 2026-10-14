@@ -37,6 +37,18 @@ estructura, configuración, logging, CLI, doctor, probe, tests y documentación.
 No presentes los módulos reservados como funcionalidades implementadas.
 No añadas una interfaz web, un servicio ni procesamiento remoto en esta fase.
 
+## Mantenimiento del roadmap
+1. Antes de implementar funcionalidades, consulta `ROADMAP.md`.
+2. Identifica la fase y subfase activa según el roadmap y la autorización actual.
+3. Evita funcionalidades de fases futuras sin justificación técnica.
+4. Actualiza el checklist sólo después de implementar y validar.
+5. No marques tareas completadas porque existan archivos o interfaces.
+6. Registra brevemente los hitos importantes y su validación real.
+7. Conserva las seis fases originales; añade tareas nuevas como subtareas o
+   deuda técnica sin cambiar arbitrariamente sus objetivos principales.
+8. No cambies el estado de una fase sin cumplir sus criterios de aceptación.
+9. Al finalizar cada iteración, identifica la siguiente tarea pendiente.
+
 ## Logging
 Cada operación importante registra fecha UTC, archivo, operación, duración,
 resultado y error si existe. Los errores se muestran al usuario y producen un

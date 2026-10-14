@@ -15,6 +15,61 @@ media:
   ffprobe_bin: ffprobe
   probe_timeout: 30.0
 
+analysis:
+  scenes:
+    # Porcentaje scdet: menor umbral = mayor sensibilidad.
+    threshold: 10.0
+    min_scene_duration: 0.0
+    timeout: 300.0
+    # Índice absoluto de FFprobe; null prefiere la pista de video default.
+    video_stream: null
+  audio:
+    # Ventanas RMS y pico de muestra; no se infieren emociones ni reacciones.
+    window_seconds: 0.5
+    peak_dbfs: -6.0
+    silence_dbfs: -50.0
+    change_db: 6.0
+    min_silence_duration: 0.5
+    # Piso para comparar energía relativa cuando una ventana es silencio digital.
+    energy_floor_dbfs: -120.0
+    timeout: 300.0
+    # Índice absoluto de FFprobe; null prefiere la pista de audio default.
+    audio_stream: null
+    # Límites de resultados retenidos; excederlos falla sin publicar datos parciales.
+    max_windows: 100000
+    max_events: 20000
+  transcription:
+    # Opcional: sin motor/modelo local se omite con advertencia. Nunca descarga.
+    engine: whisper.cpp
+    executable: whisper-cli
+    # GGML base multilingüe instalado con autorización; ruta relativa a la raíz.
+    # Si falta el archivo, la transcripción se omite sin descargarlo.
+    model: models/ggml-base.bin
+    language: auto
+    timeout: 300.0
+    # Independiente de analysis.audio.audio_stream; índice absoluto FFprobe.
+    audio_stream: null
+    chunk_seconds: 30.0
+    max_segments: 100000
+    silence_dbfs: -50.0
+  moments:
+    # Coincidencias entre fuentes; no estima interés narrativo ni viralidad.
+    min_duration: 5.0
+    max_duration: 45.0
+    context_before: 2.0
+    context_after: 3.0
+    coincidence_window: 1.0
+    merge_gap: 1.0
+    cooldown: 10.0
+    min_sources: 2
+    min_speech_duration: 2.0
+    min_speech_words: 6
+    max_audio_event_duration: 4.0
+    max_candidates: 20
+    max_events: 100000
+    # Sólo reglas; los analizadores mantienen sus timeouts independientes.
+    timeout: 10.0
+
 logging:
   level: INFO
 
